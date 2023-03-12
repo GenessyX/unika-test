@@ -1,41 +1,25 @@
-# Класс является асинхронным TCP сервером.
-# В конструктор передаются настройки сервера и кластеризации.
-# Сервер может работать как в одном процессе, так и порождать для обработки запросов дочерние процессы.
-# Задача дописать недостающие части и по необходимости рефакторить существующий код.
-# Для реализации использовать сторонние библиотеки не нужно, достаточно стандартных библиотек python.
-
-# Ожидается увидеть реализацию работы с межпроцессным взаимодействием в том виде, в котором Вы сможете.
-# Контроль жизни дочерних процессов должен присутствовать в качестве опции.
-# Должна присутствовать опция пересоздание процессов в случае падения.
-# Предпочтительно реализовать различные режимы балансировки входящих запросов.
-# Будет плюсом задействование статической типизации.
-# Привести примеры использования готового сервиса с различными параметрами.
-
 import asyncio
-import multiprocessing
+
+PORT = 8888
+HOST = "127.0.0.1"
 
 
-class Service:
-    def __init__(self, server_options, cluster_options=None):
-        self._server_options = server_options
-        self._cluster_options = cluster_options
-        self._is_cluster_mode = False if cluster_options is None else True
-        self._is_master = True
-        self._cluster = []
+async def tcp_echo_client(message: str):
+    reader, writer = await asyncio.open_connection(HOST, PORT)
+    writer.write(message.encode("utf-8"))
+    await writer.drain()
+    data = await reader.read(100)
+    print(f"Data: {data}")
+    writer.close()
+    await writer.wait_closed()
 
-    async def start(self):
-        if self._is_cluster_mode:
-            if self._is_master:
-                await self.start_cluster()
-            else:
-                await self.start_worker()
-        else:
-            await self.start_worker()
 
-    async def start_worker(self):
-        # TODO логика запуска обработчика запросов
-        pass
+async def main():
+    tasks = []
+    for _ in range(100):
+        tasks.append(tcp_echo_client("test message\n"))
+    await asyncio.gather(*tasks)
 
-    async def start_cluster(self):
-        # TODO логика запуска дочерних процессов
-        pass
+
+if __name__ == "__main__":
+    asyncio.run(main())
