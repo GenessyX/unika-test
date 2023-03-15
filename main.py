@@ -158,12 +158,35 @@ def start_service(
 
 def main():
     parser = argparse.ArgumentParser(prog="Tcp Server")
-    parser.add_argument("-p", "--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--host", type=str, default="127.0.0.1")
-    parser.add_argument("-w", "--workers", type=int, default=os.cpu_count())
-    parser.add_argument("-c", "--cluster", action="store_true")
-    parser.add_argument("-r", "--restart-failed", action="store_false", default=True)
-    parser.add_argument("--reuse-port", action="store_false", default=True)
+    parser.add_argument(
+        "-p", "--port", type=int, default=DEFAULT_PORT, help="Specify port"
+    )
+    parser.add_argument(
+        "--host", type=str, default="127.0.0.1", help="Specify IP to bind to"
+    )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=os.cpu_count(),
+        help="Specify workers count",
+    )
+    parser.add_argument(
+        "-c", "--cluster", action="store_true", help="Start server in cluster mode"
+    )
+    parser.add_argument(
+        "-r",
+        "--restart-failed",
+        action="store_false",
+        default=True,
+        help="Disable process restart on failure",
+    )
+    parser.add_argument(
+        "--reuse-port",
+        action="store_false",
+        default=True,
+        help="Disable reuse port socket option",
+    )
     args = parser.parse_args()
 
     cluster_options = ClusterOptions(workers=args.workers) if args.cluster else None
