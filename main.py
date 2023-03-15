@@ -19,18 +19,13 @@ import signal
 import sys
 import time
 from typing import Optional
+import os
 
 from models import ClusterOptions, ServerOptions
 
 DEFAULT_PORT = 8888
 
 logging.getLogger().setLevel(logging.INFO)
-
-
-async def echo_server(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    message = await reader.readline()
-    writer.write(message)
-    await writer.drain()
 
 
 class Service:
@@ -41,7 +36,7 @@ class Service:
         name: Optional[str] = None,
     ):
         self._server_options = (
-            ServerOptions(port=DEFAULT_PORT, host="127.0.0.1")
+            ServerOptions(port=DEFAULT_PORT, host="127.0.0.1", restart_failed=True)
             if not server_options
             else server_options
         )
@@ -51,7 +46,6 @@ class Service:
         self._is_master = True
         self._cluster: list[multiprocessing.Process] = []
         self.alive = False
-        # self.loop = asyncio.new_event_loop()
 
     def init_signals(self):
         signal.signal(signal.SIGINT, self.handle_quit)
@@ -74,8 +68,11 @@ class Service:
     async def echo_server(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ):
-        message = await reader.readline()
-        writer.write(message + f" served by {self._name}".encode("utf-8"))
+        raw_message = await reader.readline()
+        message = raw_message.decode("utf-8").strip("\n")
+        if message == "quit":
+            sys.exit(4)
+        writer.write(raw_message + f" served by {self._name}".encode("utf-8"))
         await writer.drain()
 
     async def start_worker(self):
@@ -90,19 +87,41 @@ class Service:
         )
         await server.serve_forever()
 
+    async def check_cluster(self):
+        while True:
+            for (index, process) in enumerate(self._cluster):
+                if process.is_alive():
+                    continue
+                logging.error(f"{process.name} received exit code: {process.exitcode}")
+                if self._server_options.restart_failed:
+                    worker = self.create_worker(process.name)
+                    worker.start()
+                    self._cluster[index] = worker
+                else:
+                    del self._cluster[index]
+            await asyncio.sleep(1)
+
+    def create_worker(self, name: str):
+        return multiprocessing.Process(
+            name=name,
+            target=start_service,
+            args=(self._server_options, None, name),
+        )
+
     async def start_cluster(self):
         # TODO логика запуска дочерних процессов
         logging.info("Starting cluster")
         if not self._cluster_options:
             raise Exception("Provide cluster options.")
         for i in range(self._cluster_options.workers):
-            worker = multiprocessing.Process(
-                target=start_service, args=(self._server_options, None, f"worker-{i}")
-            )
+            worker = self.create_worker(f"worker-{i}")
             worker.start()
             self._cluster.append(worker)
-        for worker in self._cluster:
-            worker.join()
+
+        task = asyncio.create_task(self.check_cluster())
+        task.set_name("check-cluster")
+        task.print_stack()
+        await asyncio.Future()
 
 
 def start_service(
@@ -118,13 +137,19 @@ def main():
     parser = argparse.ArgumentParser(prog="Tcp Server")
     parser.add_argument("-p", "--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--host", type=str, default="127.0.0.1")
-    parser.add_argument("-w", "--workers", type=int, default=1)
+    parser.add_argument("-w", "--workers", type=int, default=os.cpu_count())
     parser.add_argument("-c", "--cluster", action="store_true")
+    parser.add_argument("-r", "--restart-failed", action="store_true")
     args = parser.parse_args()
 
     cluster_options = ClusterOptions(workers=args.workers) if args.cluster else None
 
-    start_service(ServerOptions(port=args.port, host=args.host), cluster_options)
+    start_service(
+        ServerOptions(
+            port=args.port, host=args.host, restart_failed=args.restart_failed
+        ),
+        cluster_options,
+    )
 
 
 if __name__ == "__main__":

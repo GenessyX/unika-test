@@ -16,7 +16,8 @@ async def tcp_echo_client(message: str):
 
 async def main():
     tasks = []
-    for _ in range(100):
+    await tcp_echo_client("quit\n")
+    for _ in range(5):
         tasks.append(tcp_echo_client("test message\n"))
     await asyncio.gather(*tasks)
 

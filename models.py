@@ -10,3 +10,4 @@ class ClusterOptions:
 class ServerOptions:
     port: int
     host: str
+    restart_failed: bool
