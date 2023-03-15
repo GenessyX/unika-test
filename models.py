@@ -11,3 +11,4 @@ class ServerOptions:
     port: int
     host: str
     restart_failed: bool
+    reuse_port: bool = True

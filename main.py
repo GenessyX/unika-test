@@ -19,7 +19,9 @@ import signal
 import sys
 import time
 from typing import Optional
+import socket
 import os
+import contextlib
 
 from models import ClusterOptions, ServerOptions
 
@@ -34,6 +36,7 @@ class Service:
         server_options: Optional[ServerOptions] = None,
         cluster_options: Optional[ClusterOptions] = None,
         name: Optional[str] = None,
+        socket: Optional[socket.SocketType] = None,
     ):
         self._server_options = (
             ServerOptions(port=DEFAULT_PORT, host="127.0.0.1", restart_failed=True)
@@ -46,12 +49,29 @@ class Service:
         self._is_master = True
         self._cluster: list[multiprocessing.Process] = []
         self.alive = False
+        if self._server_options.reuse_port:
+            self.sock = None
+        else:
+            self.sock = socket if socket else self.init_socket()
+
+    def init_socket(self):
+        family = socket.AF_INET
+        sock = socket.socket(family=family)
+        try:
+            sock.bind((self._server_options.host, self._server_options.port))
+        except OSError as exc:
+            logging.error(exc)
+            sys.exit(1)
+        return sock
 
     def init_signals(self):
         signal.signal(signal.SIGINT, self.handle_quit)
 
     def handle_quit(self, sig, frame):
         self.alive = False
+        if self._is_master and self.sock:
+            with contextlib.suppress(OSError):
+                self.sock.close()
         time.sleep(0.1)
         sys.exit(0)
 
@@ -79,13 +99,17 @@ class Service:
         # TODO логика запуска обработчика запросов
         logging.info(f"Starting worker: {self._name}")
         self.init_signals()
-        server = await asyncio.start_server(
-            self.echo_server,
-            host=self._server_options.host,
-            port=self._server_options.port,
-            reuse_port=True,
-        )
-        await server.serve_forever()
+        if not self.sock:
+            server = await asyncio.start_server(
+                self.echo_server,
+                host=self._server_options.host,
+                port=self._server_options.port,
+                reuse_port=True,
+            )
+        else:
+            server = await asyncio.start_server(self.echo_server, sock=self.sock)
+        await server.start_serving()
+        await asyncio.Future()
 
     async def check_cluster(self):
         while True:
@@ -105,7 +129,7 @@ class Service:
         return multiprocessing.Process(
             name=name,
             target=start_service,
-            args=(self._server_options, None, name),
+            args=(self._server_options, None, name, self.sock),
         )
 
     async def start_cluster(self):
@@ -118,9 +142,7 @@ class Service:
             worker.start()
             self._cluster.append(worker)
 
-        task = asyncio.create_task(self.check_cluster())
-        task.set_name("check-cluster")
-        task.print_stack()
+        asyncio.create_task(self.check_cluster(), name="check-cluster")
         await asyncio.Future()
 
 
@@ -128,8 +150,9 @@ def start_service(
     server_options: Optional[ServerOptions] = None,
     cluster_options: Optional[ClusterOptions] = None,
     name: Optional[str] = None,
+    socket: Optional[socket.SocketType] = None,
 ):
-    service = Service(server_options, cluster_options, name)
+    service = Service(server_options, cluster_options, name, socket)
     asyncio.run(service.start())
 
 
@@ -139,14 +162,18 @@ def main():
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("-w", "--workers", type=int, default=os.cpu_count())
     parser.add_argument("-c", "--cluster", action="store_true")
-    parser.add_argument("-r", "--restart-failed", action="store_true")
+    parser.add_argument("-r", "--restart-failed", action="store_false", default=True)
+    parser.add_argument("--reuse-port", action="store_false", default=True)
     args = parser.parse_args()
 
     cluster_options = ClusterOptions(workers=args.workers) if args.cluster else None
 
     start_service(
         ServerOptions(
-            port=args.port, host=args.host, restart_failed=args.restart_failed
+            port=args.port,
+            host=args.host,
+            restart_failed=args.restart_failed,
+            reuse_port=args.reuse_port,
         ),
         cluster_options,
     )
